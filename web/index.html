@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>YOLO Inventory App</title>
+    <link rel="stylesheet" href="css/style.css">
+    <!-- jsPDF for PDF generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+    <div id="splash-screen">
+        <img src="assets/splash.png" alt="Lucas Vision Splash">
+    </div>
+
+    <div id="setup-screen" style="display:none;">
+        <h1>Inventory Setup</h1>
+        <p id="location-status">Locating via GPS...</p>
+        <input type="text" id="address-input" placeholder="Address (Auto-filling...)" required>
+        <input type="text" id="room-input" placeholder="Room ID (e.g., Office 3B)" required>
+        <button id="begin-btn" disabled>Start Cataloging</button>
+    </div>
+
+    <div id="app-container" style="display:none;">
+        <video id="camera-feed" autoplay playsinline muted></video>
+        <!-- Canvas for drawing bounding boxes (and detecting clicks) -->
+        <canvas id="bounding-boxes"></canvas>
+        
+        <div id="catalog-ui">
+            <div id="catalog-count">Items: 0</div>
+            <button id="finish-btn">Finish Room</button>
+        </div>
+
+        <div id="ui-layer">
+            <h1 id="status-text">Initializing Camera...</h1>
+            <div id="controls" style="display:none;">
+                <label for="conf-slider">Confidence: <span id="conf-value">40%</span></label>
+                <input type="range" id="conf-slider" min="10" max="95" value="40" step="5">
+            </div>
+            <!-- Visual feedback popup -->
+            <div id="flash-msg" style="display:none;">Added to Catalog!</div>
+        </div>
+    </div>
+
+    <!-- ONNX Runtime Web -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+    <!-- App Logic -->
+    <script src="js/app.js"></script>
+</body>
+</html>
