@@ -28,7 +28,7 @@ let roomId = '';
 let currentDrawnBoxes = [];
 
 const modelInputShape = [1, 3, 640, 640];
-const MODEL_PATH = 'model/yolo11n.onnx';
+const MODEL_PATH = 'model/exp-2.onnx';
 const MODEL_CLASSES = [
   'Communication 1 Card',
   'Communication 2 Card',
