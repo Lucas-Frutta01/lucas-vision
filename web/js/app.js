@@ -22,23 +22,19 @@ const confValue = document.getElementById('conf-value');
 // State
 let session;
 let confidenceThreshold = 0.4;
-let catalog = [];
+let countSnapshots = [];
 let address = '';
 let roomId = '';
 let currentDrawnBoxes = [];
 
 const modelInputShape = [1, 3, 640, 640];
-const COCO_CLASSES = [
-  'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat',
-  'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat',
-  'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack',
-  'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball',
-  'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
-  'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
-  'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair',
-  'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse',
-  'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator',
-  'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'
+const MODEL_PATH = 'model/exp-2.onnx';
+const MODEL_CLASSES = [
+  'Communication 1 Card',
+  'Communication 2 Card',
+  'Managing 1 Card',
+  'Power Card',
+  'Transmission 1 Card'
 ];
 
 confSlider.addEventListener('input', (e) => {
@@ -120,7 +116,7 @@ window.addEventListener('resize', resizeCanvas);
 async function loadModel() {
     statusText.innerText = "Loading AI Model (~10MB)...";
     ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
-    session = await ort.InferenceSession.create('model/yolo11n.onnx', { executionProviders: ['wasm'] });
+    session = await ort.InferenceSession.create(MODEL_PATH, { executionProviders: ['wasm'] });
     statusText.innerText = "Model loaded. Ready!";
     statusText.style.display = "none";
     controls.style.display = "block";
@@ -180,7 +176,7 @@ async function runInference() {
     const results = await session.run({ images: tensor });
     const output = results[session.outputNames[0]].data;
     
-    const numBoxes = 8400; const numClasses = 80;
+    const numBoxes = 8400; const numClasses = MODEL_CLASSES.length;
     let detections = [];
 
     for (let index = 0; index < numBoxes; index++) {
@@ -221,14 +217,14 @@ function drawBoxes(detections) {
             classId: det.classId, prob: det.prob, rawBox: det.box
         });
 
-        const hue = (det.classId * 360) / 80;
+        const hue = (det.classId * 360) / MODEL_CLASSES.length;
         const color = `hsl(${hue}, 100%, 50%)`;
 
         ctx.strokeStyle = color; ctx.lineWidth = 4;
         ctx.strokeRect(scaledX, scaledY, scaledW, scaledH);
         
         ctx.fillStyle = color;
-        const text = `${COCO_CLASSES[det.classId]} (Tap to Catalog)`;
+        const text = `${MODEL_CLASSES[det.classId] || `class_${det.classId}`} ${Math.round(det.prob * 100)}%`;
         ctx.font = '16px Arial';
         const textWidth = ctx.measureText(text).width;
         ctx.fillRect(scaledX, scaledY - 24, textWidth + 10, 24);
@@ -238,92 +234,249 @@ function drawBoxes(detections) {
     });
 }
 
-// --- CATALOG INTERACTION ---
-function captureCrop(box) {
-    const minDim = Math.min(video.videoWidth, video.videoHeight);
-    const startX = (video.videoWidth - minDim) / 2;
-    const startY = (video.videoHeight - minDim) / 2;
-    const scale = minDim / 640;
-    
-    // Map from 640x640 space back to the native video pixel space
-    const vX = startX + (box[0] * scale);
-    const vY = startY + (box[1] * scale);
-    const vW = box[2] * scale;
-    const vH = box[3] * scale;
+// --- COUNT SNAPSHOT INTERACTION ---
+// The app no longer catalogs individual tapped objects.
+// Instead, it saves one evidence screenshot + per-class counts each time the user presses the count button.
 
-    const cropCanvas = document.createElement('canvas');
-    cropCanvas.width = vW; cropCanvas.height = vH;
-    const cropCtx = cropCanvas.getContext('2d');
-    cropCtx.drawImage(video, vX, vY, vW, vH, 0, 0, vW, vH);
-    return cropCanvas.toDataURL('image/jpeg', 0.8);
+function getCurrentCounts() {
+    const counts = {};
+
+    currentDrawnBoxes.forEach((box) => {
+        const name = MODEL_CLASSES[box.classId] || `class_${box.classId}`;
+        counts[name] = (counts[name] || 0) + 1;
+    });
+
+    return counts;
 }
 
-canvas.addEventListener('click', (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const clickY = e.clientY - rect.top;
-    
-    // Find smallest box clicked (handles overlaps)
-    let clickedBox = null; let minArea = Infinity;
-    for (const box of currentDrawnBoxes) {
-        if (clickX >= box.scaledX && clickX <= box.scaledX + box.scaledW &&
-            clickY >= box.scaledY && clickY <= box.scaledY + box.scaledH) {
-            const area = box.scaledW * box.scaledH;
-            if (area < minArea) { minArea = area; clickedBox = box; }
+function getTotalCount(counts) {
+    return Object.values(counts).reduce((sum, value) => sum + value, 0);
+}
+
+function calculateFinalSummary() {
+    const summary = {};
+
+    countSnapshots.forEach((snapshot) => {
+        Object.entries(snapshot.counts).forEach(([name, count]) => {
+            summary[name] = (summary[name] || 0) + count;
+        });
+    });
+
+    return summary;
+}
+
+function formatCounts(counts) {
+    const entries = Object.entries(counts).sort((a, b) => a[0].localeCompare(b[0]));
+
+    if (entries.length === 0) {
+        return "No objects detected";
+    }
+
+    return entries.map(([name, count]) => `${name}: ${count}`).join(", ");
+}
+
+function captureEvidenceScreenshot() {
+    const evidenceCanvas = document.createElement('canvas');
+    evidenceCanvas.width = canvas.width;
+    evidenceCanvas.height = canvas.height;
+
+    const evidenceCtx = evidenceCanvas.getContext('2d');
+
+    // Match the square crop used by the model, so the screenshot aligns with the bounding boxes.
+    const minCanvasDim = Math.min(canvas.width, canvas.height);
+    const offsetX = (canvas.width - minCanvasDim) / 2;
+    const offsetY = (canvas.height - minCanvasDim) / 2;
+
+    const minVideoDim = Math.min(video.videoWidth, video.videoHeight);
+    const startX = (video.videoWidth - minVideoDim) / 2;
+    const startY = (video.videoHeight - minVideoDim) / 2;
+
+    evidenceCtx.fillStyle = "#000000";
+    evidenceCtx.fillRect(0, 0, evidenceCanvas.width, evidenceCanvas.height);
+
+    evidenceCtx.drawImage(
+        video,
+        startX, startY, minVideoDim, minVideoDim,
+        offsetX, offsetY, minCanvasDim, minCanvasDim
+    );
+
+    // Add the current bounding-box overlay as evidence.
+    evidenceCtx.drawImage(canvas, 0, 0);
+
+    return evidenceCanvas.toDataURL('image/jpeg', 0.85);
+}
+
+function updateSnapshotCounter() {
+    const counter = document.getElementById('catalog-count');
+    if (!counter) return;
+
+    const latest = countSnapshots[countSnapshots.length - 1];
+    if (!latest) {
+        counter.innerText = "Snapshots: 0";
+        return;
+    }
+
+    counter.innerText = `Snapshots: ${countSnapshots.length} | Last count: ${getTotalCount(latest.counts)}`;
+}
+
+function showFlashMessage(message) {
+    const flash = document.getElementById('flash-msg');
+    if (!flash) return;
+
+    flash.innerText = message;
+    flash.style.display = 'block';
+    setTimeout(() => { flash.style.display = 'none'; }, 1200);
+}
+
+function saveCountSnapshot() {
+    const counts = getCurrentCounts();
+
+    if (getTotalCount(counts) === 0) {
+        alert("No objects detected in the current view.");
+        return;
+    }
+
+    const snapshotNumber = countSnapshots.length + 1;
+
+    const snapshot = {
+        id: `SNAP-${String(snapshotNumber).padStart(3, '0')}`,
+        timestamp: new Date().toLocaleString(),
+        address,
+        roomId,
+        screenshot: captureEvidenceScreenshot(),
+        counts
+    };
+
+    countSnapshots.push(snapshot);
+    updateSnapshotCounter();
+    showFlashMessage(`Saved snapshot ${snapshotNumber}: ${getTotalCount(counts)} objects counted`);
+}
+
+// Create the Count button from JavaScript, so index.html only needs minimal changes.
+// If a button with id="count-btn" already exists in index.html, this code will reuse it.
+function setupCountButton() {
+    let countBtn = document.getElementById('count-btn');
+
+    if (!countBtn) {
+        countBtn = document.createElement('button');
+        countBtn.id = 'count-btn';
+        countBtn.innerText = 'Count current view';
+
+        const finishBtn = document.getElementById('finish-btn');
+        if (finishBtn && finishBtn.parentNode) {
+            finishBtn.parentNode.insertBefore(countBtn, finishBtn);
+        } else if (controls) {
+            controls.appendChild(countBtn);
         }
     }
-    
-    if (clickedBox) {
-        const name = COCO_CLASSES[clickedBox.classId];
-        const imgData = captureCrop(clickedBox.rawBox);
-        const desc = `Identified as a ${name} with ${Math.round(clickedBox.prob * 100)}% confidence at ${address}.`;
-        
-        // Generate a unique 8-character inventory ID
-        const invId = 'LV-' + Math.random().toString(36).substr(2, 6).toUpperCase();
-        
-        catalog.push({ id: invId, name, desc, imgData });
-        document.getElementById('catalog-count').innerText = `Items: ${catalog.length}`;
-        
-        // Show flash message
-        const flash = document.getElementById('flash-msg');
-        flash.style.display = 'block';
-        setTimeout(() => { flash.style.display = 'none'; }, 1000);
-    }
-});
+
+    countBtn.addEventListener('click', saveCountSnapshot);
+}
+
+setupCountButton();
+
+// Tapping the canvas is no longer used for cataloging.
+// Counting is now done only through the "Count current view" button.
 
 // --- PDF GENERATION ---
 document.getElementById('finish-btn').addEventListener('click', () => {
-    if (catalog.length === 0) {
-        alert("Catalog is empty!"); return;
+    if (countSnapshots.length === 0) {
+        alert("No count snapshots saved yet!");
+        return;
     }
-    
+
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
-    
-    doc.setFontSize(22); doc.text(`Room Inventory Catalog`, 10, 20);
-    doc.setFontSize(12); doc.text(`Address: ${address}`, 10, 30);
-    doc.text(`Room ID: ${roomId}`, 10, 38);
-    doc.text(`Date Cataloged: ${new Date().toLocaleString()}`, 10, 46);
-    
-    let yOffset = 60;
-    catalog.forEach((item, index) => {
-        if (yOffset > 240) { doc.addPage(); yOffset = 20; }
-        
-        doc.setFontSize(14); doc.text(`${index + 1}. ${item.name.toUpperCase()} (ID: ${item.id})`, 10, yOffset);
-        doc.setFontSize(10); doc.text(item.desc, 10, yOffset + 6);
-        
-        // Add image (preserving aspect ratio)
-        const imgProps = doc.getImageProperties(item.imgData);
-        const pdfWidth = 50;
+
+    doc.setFontSize(22);
+    doc.text(`Object Count Report`, 10, 20);
+
+    doc.setFontSize(12);
+    doc.text(`Address: ${address}`, 10, 30);
+    doc.text(`Room / Office ID: ${roomId}`, 10, 38);
+    doc.text(`Report generated: ${new Date().toLocaleString()}`, 10, 46);
+    doc.text(`Snapshots saved: ${countSnapshots.length}`, 10, 54);
+
+    let yOffset = 68;
+
+    countSnapshots.forEach((snapshot, index) => {
+        if (yOffset > 220) {
+            doc.addPage();
+            yOffset = 20;
+        }
+
+        doc.setFontSize(16);
+        doc.text(`Snapshot ${index + 1} (${snapshot.id})`, 10, yOffset);
+
+        doc.setFontSize(10);
+        doc.text(`Time: ${snapshot.timestamp}`, 10, yOffset + 7);
+        doc.text(`Total objects in this screenshot: ${getTotalCount(snapshot.counts)}`, 10, yOffset + 14);
+
+        const imgProps = doc.getImageProperties(snapshot.screenshot);
+        const pdfWidth = 180;
         const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-        
-        doc.addImage(item.imgData, 'JPEG', 10, yOffset + 10, pdfWidth, pdfHeight);
-        
-        yOffset += pdfHeight + 25; // Advance cursor
+
+        if (yOffset + 22 + pdfHeight > 270) {
+            doc.addPage();
+            yOffset = 20;
+        }
+
+        doc.addImage(snapshot.screenshot, 'JPEG', 10, yOffset + 20, pdfWidth, pdfHeight);
+
+        yOffset += pdfHeight + 30;
+
+        doc.setFontSize(11);
+        doc.text("Counts for this screenshot:", 10, yOffset);
+        yOffset += 7;
+
+        const entries = Object.entries(snapshot.counts).sort((a, b) => a[0].localeCompare(b[0]));
+
+        entries.forEach(([name, count]) => {
+            if (yOffset > 280) {
+                doc.addPage();
+                yOffset = 20;
+            }
+
+            doc.text(`${name}: ${count}`, 14, yOffset);
+            yOffset += 6;
+        });
+
+        yOffset += 8;
     });
-    
+
+    // Final summary at the bottom of the report
+    const finalSummary = calculateFinalSummary();
+
+    if (yOffset > 230) {
+        doc.addPage();
+        yOffset = 20;
+    }
+
+    doc.setFontSize(18);
+    doc.text("Final Summary", 10, yOffset);
+    yOffset += 10;
+
+    doc.setFontSize(11);
+    const summaryEntries = Object.entries(finalSummary).sort((a, b) => a[0].localeCompare(b[0]));
+    let grandTotal = 0;
+
+    summaryEntries.forEach(([name, count]) => {
+        if (yOffset > 280) {
+            doc.addPage();
+            yOffset = 20;
+        }
+
+        doc.text(`${name}: ${count}`, 14, yOffset);
+        grandTotal += count;
+        yOffset += 7;
+    });
+
+    yOffset += 4;
+    doc.setFontSize(13);
+    doc.text(`Grand total objects counted: ${grandTotal}`, 10, yOffset);
+
     // Format filename safely
     const safeAddr = address.substring(0, 15).replace(/[^a-z0-9]/gi, '_').toLowerCase();
     const safeRoom = roomId.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-    doc.save(`${safeAddr}_${safeRoom}.pdf`);
+    doc.save(`${safeAddr}_${safeRoom}_count_report.pdf`);
 });
